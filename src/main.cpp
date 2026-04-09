@@ -1,12 +1,12 @@
 // main.cpp — ESP32 Last Wish demo
 // Smoothly sweeps a servo 0–180° and saves its position on power loss.
 //
-// ⚠️  POWER-UP ORDER:
+//   POWER-UP ORDER:
 //   1. Apply power to the servo/motor FIRST.
 //   2. Then apply power to the ESP32 circuit.
 //   Never power other devices from this circuit — it drains the backup capacitor.
 //
-// ⚠️  POWER-DOWN ORDER:
+//   POWER-DOWN ORDER:
 //   1. Cut ESP32 power first.
 //   2. Then cut motor/servo power.
 
@@ -27,8 +27,8 @@ const int f  = 50;          // 50 Hz servo frequency
 const int r  = 16;          // 16-bit resolution
 
 // ── Servo PWM range (µs) ──────────────────────────────────────
-const int min_us = 801;     // ≈ 0°
-const int max_us = 1641;    // ≈ 180°
+const int min_us = 849;     // ≈ 0°
+const int max_us = 1695;    // ≈ 180°
 const int step   = 3;       // Smooth sweep increment
 
 // ── Live position (volatile — ISR reads this) ─────────────────
@@ -40,6 +40,24 @@ uint32_t us_to_duty(int us) {
     return (uint32_t)((us / 20000.0) * ((1 << r) - 1));
 }
 
+void set_servo_angle(double angle) {
+
+
+  tgt = angle;
+
+
+  while (!(abs(cur - tgt) <3)) {
+      if (cur < tgt) {
+          cur += step;
+      } else {
+          cur -= step;
+      }
+      ledcWrite(ch, us_to_duty(cur));
+      delay(15); // Adjust for speed
+      Serial.printf("[SERVO] Moving to %.1f deg (PWM: %d)\n", angle, cur);
+  }
+}
+
 void setup() {
     Serial.begin(115200);
 
@@ -47,29 +65,48 @@ void setup() {
     ledcSetup(ch, f, r);
     ledcAttachPin(servoPin, ch);
 
-    // 1️⃣  Init Last Wish system FIRST
+    // 1️  Init Last Wish system FIRST
     LastWish_begin(savePin, cur, min_us, max_us);
-
-    // 2️⃣  Load last saved position
+    
+    // 2️  Load last saved position
     cur = LastWish_load(min_us);
     tgt = max_us;
-
+    delay(1000);  // Brief delay to ensure Serial output is readable before sweeping
     ledcWrite(ch, us_to_duty(cur));
     Serial.print("[LastWish] Loaded position: ");
     Serial.println(cur);
 }
-
+String input = ""; // Buffer for serial input
 void loop() {
-    // Smooth sweep toward target
-    if (abs(cur - tgt) <= step) cur = tgt;
-    else if (cur < tgt)         cur += step;
-    else                        cur -= step;
 
-    ledcWrite(ch, us_to_duty(cur));
+      while (Serial.available()) {
+        char c = Serial.read();
 
-    // Reverse direction at limits
-    if (cur == max_us) tgt = min_us;
-    if (cur == min_us) tgt = max_us;
+        // Check for ENTER (newline)
+        if (c == '\n') {
+            Serial.print("You entered: ");
+            Serial.println(input);
+            set_servo_angle(input.toDouble());
+           delay(100);
+            input = "";  // clear for next input
+        }
+        else if (c != '\r') { 
+            // ignore carriage return (\r)
+            input += c;
+        }
+    }
 
-    delay(30);  // ISR fires instantly regardless of delay()
+
+    // // Smooth sweep toward target
+    // if (abs(cur - tgt) <= step) cur = tgt;
+    // else if (cur < tgt)         cur += step;
+    // else                        cur -= step;
+
+    // ledcWrite(ch, us_to_duty(cur));
+
+    // // Reverse direction at limits
+    // if (cur == max_us) tgt = min_us;
+    // if (cur == min_us) tgt = max_us;
+
+    // delay(30);  // ISR fires instantly regardless of delay()
 }

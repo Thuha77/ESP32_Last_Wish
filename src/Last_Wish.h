@@ -2,15 +2,20 @@
 // Servo Position Preservation on Sudden Power Loss
 // "When power dies, the ESP32 fulfils its last wish — saving its position before the final reset."
 //
-// GitHub: https://github.com/yourname/ESP32_Last_Wish
+// GitHub: https://github.com/Thuha77/ESP32_Last_Wish.git
 // License: MIT
 //
-// ⚠️  POWER-UP CAUTION:
+//   POWER-UP CAUTION:
 //     1. Power the servo/motor FIRST, then power the ESP32 circuit.
 //     2. NEVER power sensors or other devices from the ESP32 board or
 //        this circuit — doing so will drain the backup capacitor and
 //        cause the save to fail due to insufficient hold-up power.
 //     3. For power-DOWN: cut ESP32 power first, then motor power.
+         
+
+                           //or
+
+
 //     4. Using a single main switch that cuts both simultaneously is
 //        also safe and acceptable.
 
@@ -72,7 +77,7 @@ void LastWish_begin(int pin, volatile int& cur, int minUs, int maxUs) {
         4096, NULL, 25,
         &_lw_saveHandle, 0
     );
-    pinMode(pin, INPUT);   // external voltage divider handles safe voltage
+    pinMode(pin, INPUT_PULLDOWN);   // external voltage divider handles safe voltage
     attachInterrupt(digitalPinToInterrupt(pin), _lw_powerCutISR, FALLING);
 }
 
