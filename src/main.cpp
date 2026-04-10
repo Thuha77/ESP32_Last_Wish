@@ -66,7 +66,7 @@ void setup() {
     ledcAttachPin(servoPin, ch);
 
     // 1️  Init Last Wish system FIRST
-    LastWish_begin(savePin, cur, min_us, max_us);
+    LastWish_begin(savePin, cur);
     
     // 2️  Load last saved position
     cur = LastWish_load(min_us);
