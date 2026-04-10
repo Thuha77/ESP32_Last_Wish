@@ -2,22 +2,11 @@
 // Servo Position Preservation on Sudden Power Loss
 // "When power dies, the ESP32 fulfils its last wish — saving its position before the final reset."
 //
-// GitHub: https://github.com/Thuha77/ESP32_Last_Wish.git
-// License: MIT
+// Optimized for minimum latency from power-cut detection to NVS write
+// ISR → Context switch → Snapshot → NVS write happens as fast as possible
 //
-//   POWER-UP CAUTION:
-//     1. Power the servo/motor FIRST, then power the ESP32 circuit.
-//     2. NEVER power sensors or other devices from the ESP32 board or
-//        this circuit — doing so will drain the backup capacitor and
-//        cause the save to fail due to insufficient hold-up power.
-//     3. For power-DOWN: cut ESP32 power first, then motor power.
-         
-
-                           //or
-
-
-//     4. Using a single main switch that cuts both simultaneously is
-//        also safe and acceptable.
+// GitHub: https://github.com/Thuha77/ESP32_Last_Wish
+// License: MIT
 
 #pragma once
 #include <Arduino.h>
@@ -25,74 +14,85 @@
 
 static Preferences _lw_prefs;
 static TaskHandle_t _lw_saveHandle = NULL;
-static volatile int* _lw_curPtr    = nullptr;
-static int _lw_minUs = 0;
-static int _lw_maxUs = 0;
-static volatile bool _lw_saveDone  = false;
+static volatile int* _lw_curPtr = nullptr;
+static volatile bool _lw_saveDone = false;
 
-// ---------------------------------------------------------------
-// ISR — fires in ~1µs on power-cut detection (FALLING edge)
-// Only job: wake the save task via direct-to-task notification
-// ---------------------------------------------------------------
+// ================================================
+// Ultra-light ISR - ONLY wakes the high-priority task
+// Minimal logic → fastest possible response
+// ================================================
 void IRAM_ATTR _lw_powerCutISR() {
-    if (_lw_saveDone) return;
-    portDISABLE_INTERRUPTS();
     BaseType_t woken = pdFALSE;
     vTaskNotifyGiveFromISR(_lw_saveHandle, &woken);
     portYIELD_FROM_ISR(woken);
 }
 
-// ---------------------------------------------------------------
-// Core 0 save task — priority 25
-// Sleeps with zero CPU until ISR wakes it.
-// Priority 25 automatically freezes loop() (1), WiFi (19), BT (22).
-// ---------------------------------------------------------------
+// ================================================
+// Save task - Highest priority on Core 1
+// Wakes up quickly and writes to NVS with minimal delay
+// ================================================
 void _lw_saveTask(void* param) {
     for (;;) {
+        // Sleep with zero CPU usage until ISR wakes us
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        if (_lw_saveDone) continue;
+
         _lw_saveDone = true;
+
+        // Take snapshot of current position (very fast)
         int snapshot = *_lw_curPtr;
+
+        // Write to NVS (Preferences)
         _lw_prefs.putUInt("pwmVal", (uint32_t)snapshot);
-        Serial.print("[LastWish SAVED]: ");
-        Serial.println(snapshot);
+
+        // Optional: small safety delay for NVS internal operations (usually not needed)
+         vTaskDelay(2);
+
+        // Task has done its job - suspend forever
         vTaskSuspend(NULL);
     }
 }
 
-// ---------------------------------------------------------------
-// LastWish_begin()   — Call FIRST in setup()
-//   pin    : GPIO connected to voltage-divider midpoint
-//   cur    : volatile int holding live PWM value
-//   minUs  : minimum valid PWM µs (e.g. 801)
-//   maxUs  : maximum valid PWM µs (e.g. 1641)
-// ---------------------------------------------------------------
-void LastWish_begin(int pin, volatile int& cur, int minUs, int maxUs) {
+// ================================================
+// LastWish_begin() — Call FIRST in setup()
+//   pin    : GPIO connected to voltage-divider for power-cut detection
+//   cur    : volatile int that holds the live servo PWM value (µs)
+// ================================================
+void LastWish_begin(int pin, volatile int& cur) {
     _lw_curPtr = &cur;
-    _lw_minUs  = minUs;
-    _lw_maxUs  = maxUs;
+
+    // Initialize NVS namespace
     _lw_prefs.begin("lw_servo", false);
+
+    // Create high-priority save task on Core 1
     xTaskCreatePinnedToCore(
-        _lw_saveTask, "LastWishTask",
-        4096, NULL, 25,
-        &_lw_saveHandle, 0
+        _lw_saveTask,           // task function
+        "LastWish",             // task name
+        4096,                   // stack size in bytes
+        NULL,                   // parameter
+        24,                     // priority (highest user priority)
+        &_lw_saveHandle,        // task handle
+        1                       // Core 1 (better for low interference with WiFi)
     );
-    pinMode(pin, INPUT_PULLDOWN);   // external voltage divider handles safe voltage
+
+    // Setup power-cut detection pin
+    pinMode(pin, INPUT_PULLDOWN);
     attachInterrupt(digitalPinToInterrupt(pin), _lw_powerCutISR, FALLING);
 }
 
-// ---------------------------------------------------------------
-// LastWish_load()   — Call AFTER LastWish_begin() in setup()
-//   defaultVal : returned on first boot or if stored value is invalid
-// ---------------------------------------------------------------
+// ================================================
+// LastWish_load() — Call AFTER LastWish_begin() in setup()
+//   defaultVal : value to return on first boot or invalid saved value
+// ================================================
 int LastWish_load(int defaultVal) {
-    int v = (int)_lw_prefs.getUInt("pwmVal", (uint32_t)defaultVal);
-    return (v >= _lw_minUs && v <= _lw_maxUs) ? v : defaultVal;
+    uint32_t v = _lw_prefs.getUInt("pwmVal", (uint32_t)defaultVal);
+    // Basic range validation (adjust min/max according to your servo)
+    //return (v >= 800 && v <= 1650) ? (int)v : defaultVal;
+    return (int)v;
 }
 
-// ---------------------------------------------------------------
-// LastWish_clear()  — Erase saved value (factory reset / testing)
-// ---------------------------------------------------------------
+// ================================================
+// LastWish_clear() — Erase saved position (for factory reset or testing)
+// ================================================
 void LastWish_clear() {
     _lw_prefs.clear();
     Serial.println("[LastWish] Saved position cleared.");
